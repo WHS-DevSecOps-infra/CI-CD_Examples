@@ -7,7 +7,6 @@ resource "aws_s3_bucket" "whs" {
   bucket = "whs-terraform-statebucket"
 }
 
-
 # resource "aws_instance" "example" {
 #   ami           = "ami-0d5bb3742db8fc264" 
 #   instance_type = "t2.micro"
