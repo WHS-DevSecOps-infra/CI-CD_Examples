@@ -1,0 +1,56 @@
+name: Terraform Deploy with Trivy Scan
+
+on:
+  push:
+    branches: [ "main" ]  
+  pull_request:
+
+jobs:
+  terraform:
+    name: Terraform CI/CD + Trivy
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. GitHub 저장소 체크아웃
+    - name: Checkout repo
+      uses: actions/checkout@v3
+
+    # 2. Terraform 설치
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.7  
+
+    # 3. AWS 자격증명 설정
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ap-northeast-2
+
+    # 4. Trivy IaC 스캔 (Terraform 코드에 대한 보안 취약점 탐지)
+    - name: Trivy IaC scan (Terraform security check)
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: "config"
+        scan-ref: .
+        format: "table"
+        exit-code: 0       # 1로 설정하면 취약점 발견 시 워크플로우 실패 처리 가능
+        severity: "HIGH,CRITICAL"
+
+    # 5. Terraform 초기화
+    - name: Terraform Init
+      run: terraform init
+
+    # 6. Terraform 유효성 검사
+    - name: Terraform Validate
+      run: terraform validate
+
+    # 7. Terraform 계획 출력
+    - name: Terraform Plan
+      run: terraform plan
+
+    # 8. Terraform 적용 (실제 AWS 리소스 생성)
+    - name: Terraform Apply
+      run: terraform apply -auto-approve
