@@ -18,3 +18,42 @@ jobs:
 
       - name: List files in S3 bucket
         run: aws s3 ls cloudfence-bucket
+  terraform:
+    name: "Security Check, and Deploy"
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: "ap-northeast-2"
+      TF_VERSION: "1.4.0"
+    steps:
+      - name: "Checkout GitHub repository"
+        uses: actions/checkout@v3
+
+      # terraform 설치 및 초기화
+      - name: "Set up Terraform"
+        uses: hashicorp/setup-terraform@v1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      # trivy 설치 밀 실행
+      - name: Run Trivy IaC Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: config
+          scan-ref: .
+
+      - name: "Terraform Init"
+        run: terraform init
+
+      - name: "Terraform Format"
+        run: terraform fmt
+
+      - name: "Terraform Validate"
+        run: terraform validate
+
+      - name: "Terraform Plan"
+        run: terraform plan -out=tfplan
+
+      - name: "Terraform Apply"
+        if: github.ref == 'refs/heads/main'
+        run: terraform apply -auto-approve tfplan
+
