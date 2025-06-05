@@ -26,6 +26,12 @@ jobs:
       AWS_REGION: "ap-northeast-2"
       TF_VERSION: "1.4.0"
     steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ap-northeast-2
+          role-to-assume: arn:aws:iam::433331841346:role/cloudfencedemorole
+
       - name: "Checkout GitHub repository"
         uses: actions/checkout@v3
 
@@ -54,6 +60,6 @@ jobs:
         run: terraform plan -out=tfplan
 
       - name: "Terraform Apply"
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/feature-#7'
         run: terraform apply -auto-approve tfplan
 
