@@ -8,6 +8,6 @@ resource "random_id" "suffix" {
 }
 
 resource "aws_s3_bucket" "whs" {
-  bucket = "cloudfence-bucket-${random_id.suffix.hex}"
-  force_destroy = true
+  bucket = "cloudfence-bucket"
 }
+
