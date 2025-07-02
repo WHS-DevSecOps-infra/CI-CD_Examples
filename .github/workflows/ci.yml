@@ -77,6 +77,7 @@ jobs:
     env:
       INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      INFRACOST_TERRAFORM_CLI_WRAPPER: false
 
     steps:
       - name: Checkout Code
@@ -132,27 +133,11 @@ jobs:
             ${{ steps.plan.outputs.PLAN }}
             ```
 
-      - name: Terraform Plan (for Infracost)
-        run: terraform plan -refresh=false -out=tfplan.binary
-        working-directory: ${{ matrix.dir }}
-
-      - name: Convert Plan to JSON
-        run: terraform show -json tfplan.binary > plan.json
-        working-directory: ${{ matrix.dir }}
-
       - name: Setup Infracost
         uses: infracost/actions/setup@v2
 
-      - name: Infracost Breakdown
-        run: |
-          infracost breakdown \
-            --path=./plan.json \
-            --format=json \
-            --out-file=/tmp/infracost.json
-        working-directory: ${{ matrix.dir }}
-
       - name: Infracost Comment on Pull Request
-        uses: infracost/actions@v1
+        uses: infracost/actions/comment@v1
         with:
-          path: ${{ matrix.dir }}/plan.json
+          path: ${{ matrix.dir }}
           behavior: update
