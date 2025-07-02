@@ -143,11 +143,11 @@ jobs:
           infracost breakdown \
             --path=plan.json \
             --format=json \
-            --out-file=/tmp/infracost.json
+            --out-file=infracost.json
         working-directory: ${{ matrix.dir }}
 
       - name: Infracost Comment on Pull Request
         uses: infracost/actions/comment@v1
         with:
-          path: ${{ matrix.dir }}/plan.json
+          path: ${{ matrix.dir }}/infracost.json
           behavior: update
