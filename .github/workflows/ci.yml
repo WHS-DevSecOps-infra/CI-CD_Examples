@@ -117,6 +117,7 @@ jobs:
         id: plan
         run: |
           terraform plan -no-color > plan.txt
+          terraform show -json > plan.json
           echo 'PLAN<<EOF' >> $GITHUB_OUTPUT
           cat plan.txt >> $GITHUB_OUTPUT
           echo 'EOF' >> $GITHUB_OUTPUT
@@ -139,5 +140,5 @@ jobs:
       - name: Infracost Comment on Pull Request
         uses: infracost/actions/comment@v1
         with:
-          path: ${{ matrix.dir }}
+          path: ${{ matrix.dir }}/plan.json
           behavior: update
