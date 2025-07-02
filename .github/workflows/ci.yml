@@ -21,7 +21,7 @@ jobs:
   detect-changes:
     runs-on: ubuntu-latest
     outputs:
-      changed_dirs: ${{ steps.set.outputs.changed_dirs }}
+      matrix: ${{ steps.set.outputs.matrix }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
@@ -31,48 +31,52 @@ jobs:
       - name: Fetch origin/main
         run: git fetch origin main
 
-      - name: Detect Changed Directories
+      - name: Detect Changed Directories & Build Matrix
         id: set
         run: |
           FILES=$(git diff --name-only origin/main...${{ github.sha }})
           echo "Changed files:"
           echo "$FILES"
 
-          DIRS=()
-          for dir in operation-team-account identity-team-account prod-team-account dev-team-account security-team-account stage-team-account management-team-account; do
-            if echo "$FILES" | grep -q "^$dir/"; then
-              DIRS+=("\"$dir\"")
+          declare -A ROLE_MAP=(
+            ["operation-team-account"]="ROLE_ARN_OPERATION"
+            ["identity-team-account"]="ROLE_ARN_IDENTITY"
+            ["prod-team-account"]="ROLE_ARN_PROD"
+            ["dev-team-account"]="ROLE_ARN_DEV"
+            ["security-team-account"]="ROLE_ARN_SECURITY"
+            ["stage-team-account"]="ROLE_ARN_STAGE"
+            ["management-team-account"]="ROLE_ARN_MANAGEMENT"
+          )
+
+          MATRIX_ITEMS=()
+
+          for DIR in "${!ROLE_MAP[@]}"; do
+            if echo "$FILES" | grep -q "^$DIR/"; then
+              ROLE_KEY="${ROLE_MAP[$DIR]}"
+              MATRIX_ITEMS+=("{\"dir\":\"$DIR\",\"role_key\":\"$ROLE_KEY\"}")
             fi
           done
 
-          if [ ${#DIRS[@]} -eq 0 ]; then
-            echo "No relevant changes detected."
-            echo "changed_dirs=[]" >> $GITHUB_OUTPUT
+          if [ ${#MATRIX_ITEMS[@]} -eq 0 ]; then
+            echo "matrix=[]" >> $GITHUB_OUTPUT
           else
-            IFS=,  # 쉼표로 문자열 구분하는 배열
-            JSON="[${DIRS[*]}]"
-            echo "Detected changed dirs: $JSON"
-            echo "changed_dirs=$JSON" >> $GITHUB_OUTPUT
+            JSON="[$(IFS=,; echo "${MATRIX_ITEMS[*]}")]"
+            echo "matrix=$JSON" >> $GITHUB_OUTPUT
           fi
 
   terraform-ci:
     needs: detect-changes
-    if: ${{ needs.detect-changes.outputs.changed_dirs != '[]' }}
+    if: ${{ needs.detect-changes.outputs.matrix != '[]' }}
     runs-on: ubuntu-latest
 
     strategy:
       matrix:
-        dir: ${{ fromJson(needs.detect-changes.outputs.changed_dirs) }}
+        include: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+      fail-fast: false
 
     env:
-      TF_DIR: ${{ matrix.dir }}
-      ROLE_ARN_OPERATION: ${{ secrets.ROLE_ARN_OPERATION }}
-      ROLE_ARN_IDENTITY: ${{ secrets.ROLE_ARN_IDENTITY }}
-      ROLE_ARN_PROD: ${{ secrets.ROLE_ARN_PROD }}
-      ROLE_ARN_DEV: ${{ secrets.ROLE_ARN_DEV }}
-      ROLE_ARN_SECURITY: ${{ secrets.ROLE_ARN_SECURITY }}
-      ROLE_ARN_STAGE: ${{ secrets.ROLE_ARN_STAGE }}
-      ROLE_ARN_MANAGEMENT: ${{ secrets.ROLE_ARN_MANAGEMENT }}
+      INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: Checkout Code
@@ -82,14 +86,14 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ap-northeast-2
-          role-to-assume: ${{ env[format('ROLE_ARN_{0}', upper(replace(matrix.dir, '-team-account', '')))] }}
+          role-to-assume: ${{ secrets[matrix.role_key] }}
 
       - name: Install tfsec
         run: |
           curl -sSL https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
 
       - name: Run tfsec (fail on HIGH+)
-        run: tfsec --minimum-severity HIGH --no-color ${{ env.TF_DIR }}
+        run: tfsec --minimum-severity HIGH --no-color ${{ matrix.dir }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v1
@@ -98,15 +102,15 @@ jobs:
 
       - name: Terraform Init
         run: terraform init
-        working-directory: ${{ env.TF_DIR }}
+        working-directory: ${{ matrix.dir }}
 
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
-        working-directory: ${{ env.TF_DIR }}
+        working-directory: ${{ matrix.dir }}
 
       - name: Terraform Validate
         run: terraform validate
-        working-directory: ${{ env.TF_DIR }}
+        working-directory: ${{ matrix.dir }}
 
       - name: Terraform Plan
         id: plan
@@ -115,7 +119,7 @@ jobs:
           echo 'PLAN<<EOF' >> $GITHUB_OUTPUT
           cat plan.txt >> $GITHUB_OUTPUT
           echo 'EOF' >> $GITHUB_OUTPUT
-        working-directory: ${{ env.TF_DIR }}
+        working-directory: ${{ matrix.dir }}
 
       - name: Comment Terraform Plan on PR
         if: github.event.pull_request.number != ''
@@ -130,11 +134,11 @@ jobs:
 
       - name: Terraform Plan (for Infracost)
         run: terraform plan -refresh=false -out=tfplan.binary
-        working-directory: ${{ env.TF_DIR }}
+        working-directory: ${{ matrix.dir }}
 
       - name: Convert Plan to JSON
         run: terraform show -json tfplan.binary > plan.json
-        working-directory: ${{ env.TF_DIR }}
+        working-directory: ${{ matrix.dir }}
 
       - name: Setup Infracost
         uses: infracost/actions/setup@v2
@@ -145,15 +149,10 @@ jobs:
             --path=./plan.json \
             --format=json \
             --out-file=/tmp/infracost.json
-        working-directory: ${{ env.TF_DIR }}
-        env:
-          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+        working-directory: ${{ matrix.dir }}
 
       - name: Infracost Comment on Pull Request
         uses: infracost/actions@v1
         with:
-          path: ${{ env.TF_DIR }}/plan.json
+          path: ${{ matrix.dir }}/plan.json
           behavior: update
-        env:
-          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
