@@ -1,0 +1,159 @@
+name: Organization CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "operation-team-account/**"
+      - "identity-team-account/**"
+      - "prod-team-account/**"
+      - "dev-team-account/**"
+      - "security-team-account/**"
+      - "stage-team-account/**"
+      - "management-team-account/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      changed_dirs: ${{ steps.set.outputs.changed_dirs }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Fetch origin/main
+        run: git fetch origin main
+
+      - name: Detect Changed Directories
+        id: set
+        run: |
+          FILES=$(git diff --name-only origin/main...${{ github.sha }})
+          echo "Changed files:"
+          echo "$FILES"
+
+          DIRS=()
+          for dir in operation-team-account identity-team-account prod-team-account dev-team-account security-team-account stage-team-account management-team-account; do
+            if echo "$FILES" | grep -q "^$dir/"; then
+              DIRS+=("\"$dir\"")
+            fi
+          done
+
+          if [ ${#DIRS[@]} -eq 0 ]; then
+            echo "No relevant changes detected."
+            echo "changed_dirs=[]" >> $GITHUB_OUTPUT
+          else
+            IFS=,  # 쉼표로 문자열 구분하는 배열
+            JSON="[${DIRS[*]}]"
+            echo "Detected changed dirs: $JSON"
+            echo "changed_dirs=$JSON" >> $GITHUB_OUTPUT
+          fi
+
+  terraform-ci:
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.changed_dirs != '[]' }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        dir: ${{ fromJson(needs.detect-changes.outputs.changed_dirs) }}
+
+    env:
+      TF_DIR: ${{ matrix.dir }}
+      ROLE_ARN_OPERATION: ${{ secrets.ROLE_ARN_OPERATION }}
+      ROLE_ARN_IDENTITY: ${{ secrets.ROLE_ARN_IDENTITY }}
+      ROLE_ARN_PROD: ${{ secrets.ROLE_ARN_PROD }}
+      ROLE_ARN_DEV: ${{ secrets.ROLE_ARN_DEV }}
+      ROLE_ARN_SECURITY: ${{ secrets.ROLE_ARN_SECURITY }}
+      ROLE_ARN_STAGE: ${{ secrets.ROLE_ARN_STAGE }}
+      ROLE_ARN_MANAGEMENT: ${{ secrets.ROLE_ARN_MANAGEMENT }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ap-northeast-2
+          role-to-assume: ${{ env[format('ROLE_ARN_{0}', upper(replace(matrix.dir, '-team-account', '')))] }}
+
+      - name: Install tfsec
+        run: |
+          curl -sSL https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+
+      - name: Run tfsec (fail on HIGH+)
+        run: tfsec --minimum-severity HIGH --no-color ${{ env.TF_DIR }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v1
+        with:
+          terraform_version: 1.4.0
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: ${{ env.TF_DIR }}
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+        working-directory: ${{ env.TF_DIR }}
+
+      - name: Terraform Validate
+        run: terraform validate
+        working-directory: ${{ env.TF_DIR }}
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan -no-color > plan.txt
+          echo 'PLAN<<EOF' >> $GITHUB_OUTPUT
+          cat plan.txt >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
+        working-directory: ${{ env.TF_DIR }}
+
+      - name: Comment Terraform Plan on PR
+        if: github.event.pull_request.number != ''
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ### Terraform Plan Output for `${{ matrix.dir }}`
+            ```hcl
+            ${{ steps.plan.outputs.PLAN }}
+            ```
+
+      - name: Terraform Plan (for Infracost)
+        run: terraform plan -refresh=false -out=tfplan.binary
+        working-directory: ${{ env.TF_DIR }}
+
+      - name: Convert Plan to JSON
+        run: terraform show -json tfplan.binary > plan.json
+        working-directory: ${{ env.TF_DIR }}
+
+      - name: Setup Infracost
+        uses: infracost/actions/setup@v2
+
+      - name: Infracost Breakdown
+        run: |
+          infracost breakdown \
+            --path=./plan.json \
+            --format=json \
+            --out-file=/tmp/infracost.json
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Infracost Comment on Pull Request
+        uses: infracost/actions@v1
+        with:
+          path: ${{ env.TF_DIR }}/plan.json
+          behavior: update
+        env:
+          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
