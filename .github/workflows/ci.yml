@@ -60,7 +60,7 @@ jobs:
           if [ ${#MATRIX_ITEMS[@]} -eq 0 ]; then
             echo "matrix=[]" >> $GITHUB_OUTPUT
           else
-            JSON="[$(IFS=,; echo "${MATRIX_ITEMS[*]}")]"
+            JSON=$(echo "${MATRIX_ITEMS[@]}" | jq -R . | jq -s .)
             echo "matrix=$JSON" >> $GITHUB_OUTPUT
           fi
 
@@ -80,35 +80,43 @@ jobs:
       INFRACOST_TERRAFORM_CLI_WRAPPER: false
 
     steps:
+      # 체크아웃
       - name: Checkout Code
         uses: actions/checkout@v3
 
+      # AWS 자격 증명 설정
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ap-northeast-2
           role-to-assume: ${{ secrets[matrix.role_key] }}
 
+      # tfsec 설치
       - name: Install tfsec
         run: |
           curl -sSL https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
 
+      # 코드 보안 검사
       - name: Run tfsec (fail on HIGH+)
         run: tfsec --minimum-severity HIGH --no-color ${{ matrix.dir }}
 
+      # Terraform 설치
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v1
         with:
           terraform_version: 1.4.0
 
+      # Terraform 초기화
       - name: Terraform Init
         run: terraform init
         working-directory: ${{ matrix.dir }}
-
+      
+      # Terraform 포맷 체크
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
         working-directory: ${{ matrix.dir }}
 
+      # Terraform 유효성 검사
       - name: Terraform Validate
         run: terraform validate
         working-directory: ${{ matrix.dir }}
@@ -135,6 +143,7 @@ jobs:
             ${{ steps.plan.outputs.PLAN }}
             ```
 
+      # Infracost 설정
       - name: Setup Infracost
         uses: infracost/actions/setup@v2
 
@@ -146,6 +155,7 @@ jobs:
             --out-file=infracost.json
         working-directory: ${{ matrix.dir }}
 
+      # PR에 Infracost 분석 결과 댓글 작성
       - name: Infracost Comment on Pull Request
         uses: infracost/actions/comment@v1
         with:
