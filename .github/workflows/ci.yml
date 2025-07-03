@@ -23,14 +23,17 @@ jobs:
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
     steps:
+      # 리포지토리 체크아웃
       - name: Checkout Code
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
+      # 원격 main 브랜치와 비교
       - name: Fetch origin/main
         run: git fetch origin main
 
+      # 변경된 디렉토리 확인 및 matrix 생성
       - name: Detect Changed Directories & Build Matrix
         id: set
         run: |
@@ -50,6 +53,7 @@ jobs:
 
           MATRIX_ITEMS=()
 
+          # 변경된 디렉토리를 확인하고 매트릭스 항목 생성
           for DIR in "${!ROLE_MAP[@]}"; do
             if echo "$FILES" | grep -q "^$DIR/"; then
               ROLE_KEY="${ROLE_MAP[$DIR]}"
@@ -57,10 +61,12 @@ jobs:
             fi
           done
 
+          # matrix가 비어 있으면 빈 배열, 아니면 JSON 배열로 변환
           if [ ${#MATRIX_ITEMS[@]} -eq 0 ]; then
             echo "matrix=[]" >> $GITHUB_OUTPUT
           else
-            JSON=$(echo "${MATRIX_ITEMS[@]}" | jq -R . | jq -s .)
+            # 'toJson' 함수로 배열을 JSON 형식으로 변환
+            JSON="${{ toJson(MATRIX_ITEMS) }}"
             echo "matrix=$JSON" >> $GITHUB_OUTPUT
           fi
 
@@ -80,7 +86,7 @@ jobs:
       INFRACOST_TERRAFORM_CLI_WRAPPER: false
 
     steps:
-      # 체크아웃
+      # 리포지토리 체크아웃
       - name: Checkout Code
         uses: actions/checkout@v3
 
@@ -121,6 +127,7 @@ jobs:
         run: terraform validate
         working-directory: ${{ matrix.dir }}
 
+      # Terraform Plan
       - name: Terraform Plan
         id: plan
         run: |
@@ -132,6 +139,7 @@ jobs:
           echo 'EOF' >> $GITHUB_OUTPUT
         working-directory: ${{ matrix.dir }}
 
+      # PR에 Terraform Plan 댓글 작성
       - name: Comment Terraform Plan on PR
         if: github.event.pull_request.number != ''
         uses: peter-evans/create-or-update-comment@v4
@@ -147,6 +155,7 @@ jobs:
       - name: Setup Infracost
         uses: infracost/actions/setup@v2
 
+      # Infracost Breakdown
       - name: Infracost Breakdown
         run: |
           infracost breakdown \
