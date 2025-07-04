@@ -51,25 +51,27 @@ jobs:
             ["management-team-account"]="ROLE_ARN_MANAGEMENT"
           )
 
-          MATRIX_ITEMS=()
+          JSON_ARRAY="[]"
 
           for FILE in $FILES; do
+            # ex) identity-team-account/S3/main.tf
             DIR=$(dirname "$FILE")
             TOP_DIR=$(echo $DIR | cut -d/ -f1)
             ROLE_KEY="${ROLE_MAP[$TOP_DIR]}"
 
             if [ -n "$ROLE_KEY" ]; then
-              MATRIX_ITEMS+=("{\"dir\":\"$DIR\",\"role_key\":\"$ROLE_KEY\"}")
+              JSON_OBJ="{\"dir\":\"$DIR\",\"role_key\":\"$ROLE_KEY\"}"
+              JSON_ARRAY=$(echo $JSON_ARRAY | jq ". + [$JSON_OBJ]")
             fi
           done
 
           # 중복 제거
-          if [ ${#MATRIX_ITEMS[@]} -eq 0 ]; then
-            echo "matrix=[]" >> $GITHUB_OUTPUT
-          else
-            UNIQUE_MATRIX=$(echo "[${MATRIX_ITEMS[*]}]" | jq 'unique')
-            echo "matrix=$UNIQUE_MATRIX" >> $GITHUB_OUTPUT
-          fi
+          JSON_ARRAY=$(echo $JSON_ARRAY | jq 'unique')
+
+          echo "Final JSON matrix:"
+          echo $JSON_ARRAY
+
+          echo "matrix=$JSON_ARRAY" >> $GITHUB_OUTPUT
 
   terraform-ci:
     needs: detect-changes
