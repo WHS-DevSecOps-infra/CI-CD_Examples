@@ -23,17 +23,14 @@ jobs:
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
     steps:
-      # git repository code 가져오기
       - name: Checkout Code
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      # 최신 origin/main 브랜치 가져오기
       - name: Fetch origin/main
         run: git fetch origin main
 
-      # 변경된 디렉토리 감지 후 matrix 구성
       - name: Detect Changed Directories & Build Matrix
         id: set
         run: |
@@ -51,7 +48,7 @@ jobs:
             ["management-team-account"]="ROLE_ARN_MANAGEMENT"
           )
 
-          JSON_ARRAY="[]"
+          TMP_FILE=$(mktemp)
 
           for FILE in $FILES; do
             # ex) identity-team-account/S3/main.tf
@@ -60,18 +57,35 @@ jobs:
             ROLE_KEY="${ROLE_MAP[$TOP_DIR]}"
 
             if [ -n "$ROLE_KEY" ]; then
-              JSON_OBJ="{\"dir\":\"$DIR\",\"role_key\":\"$ROLE_KEY\"}"
-              JSON_ARRAY=$(echo $JSON_ARRAY | jq ". + [$JSON_OBJ]")
+              echo "$DIR|$ROLE_KEY" >> $TMP_FILE
             fi
           done
 
           # 중복 제거
-          JSON_ARRAY=$(echo $JSON_ARRAY | jq 'unique')
+          UNIQUE_LINES=$(sort $TMP_FILE | uniq)
+
+          MATRIX_JSON="["
+          FIRST=1
+
+          while IFS= read -r LINE; do
+            DIR=$(echo $LINE | cut -d"|" -f1)
+            ROLE_KEY=$(echo $LINE | cut -d"|" -f2)
+
+            if [ $FIRST -eq 1 ]; then
+              FIRST=0
+            else
+              MATRIX_JSON="$MATRIX_JSON,"
+            fi
+
+            MATRIX_JSON="$MATRIX_JSON{\"dir\":\"$DIR\",\"role_key\":\"$ROLE_KEY\"}"
+          done <<< "$UNIQUE_LINES"
+
+          MATRIX_JSON="$MATRIX_JSON]"
 
           echo "Final JSON matrix:"
-          echo $JSON_ARRAY
+          echo "$MATRIX_JSON"
 
-          echo "matrix=$JSON_ARRAY" >> $GITHUB_OUTPUT
+          echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
 
   terraform-ci:
     needs: detect-changes
@@ -89,48 +103,39 @@ jobs:
       INFRACOST_TERRAFORM_CLI_WRAPPER: false
 
     steps:
-      # 변경된 코드 체크아웃
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # (OIDC 기반) AWS 자격 증명 구성
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ap-northeast-2
           role-to-assume: ${{ secrets[matrix.role_key] }}
 
-      # tfsec 설치
       - name: Install tfsec
         run: |
           curl -sSL https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
 
-      # tfsec 실행(High 이상의 취약점이 있으면 실패 처리)
       - name: Run tfsec (fail on HIGH+)
         run: tfsec --minimum-severity HIGH --no-color ${{ matrix.dir }}
 
-      # Terraform 설치
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v1
         with:
           terraform_version: 1.4.0
 
-      # Terraform 초기화
       - name: Terraform Init
         run: terraform init
         working-directory: ${{ matrix.dir }}
 
-      # Terraform 코드 포맷 확인
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
         working-directory: ${{ matrix.dir }}
 
-      # Terraform 문법 유효성 검사
       - name: Terraform Validate
         run: terraform validate
         working-directory: ${{ matrix.dir }}
 
-      # Terraform plan 및 plan 파일 생성, 출력
       - name: Terraform Plan
         id: plan
         run: |
@@ -142,7 +147,6 @@ jobs:
           echo 'EOF' >> $GITHUB_OUTPUT
         working-directory: ${{ matrix.dir }}
 
-      # Terraform plan 결과를 PR 댓글로 출력
       - name: Comment Terraform Plan on PR
         if: github.event.pull_request.number != ''
         uses: peter-evans/create-or-update-comment@v4
@@ -154,11 +158,9 @@ jobs:
             ${{ steps.plan.outputs.PLAN }}
             ```
 
-      # Infracost 설치
       - name: Setup Infracost
         uses: infracost/actions/setup@v2
 
-      # Terraform plan.json 기반으로 비용 분석
       - name: Infracost Breakdown
         run: |
           infracost breakdown \
@@ -167,7 +169,6 @@ jobs:
             --out-file=infracost.json
         working-directory: ${{ matrix.dir }}
 
-      # Infracost 결과를 PR 댓글로 작성
       - name: Infracost Comment on Pull Request
         uses: infracost/actions/comment@v1
         with:
