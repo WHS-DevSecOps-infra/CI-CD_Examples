@@ -84,7 +84,7 @@ resource "aws_dynamodb_table" "resource_locks" {
   for_each     = toset(local.resources)
   name         = "${each.key}-identity-lock"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "LockID" 
+  hash_key     = "LockID"
 
   attribute {
     name = "LockID"
