@@ -23,17 +23,17 @@ jobs:
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
     steps:
-      # 리포지토리 체크아웃
+      # git repository code 가져오기
       - name: Checkout Code
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      # 원격 main 브랜치와 비교
+      # 최신 origin/main 브랜치 가져오기
       - name: Fetch origin/main
         run: git fetch origin main
 
-      # 변경된 디렉토리 확인 및 matrix 생성
+      # 변경된 디렉토리 감지 후 matrix 구성
       - name: Detect Changed Directories & Build Matrix
         id: set
         run: |
@@ -53,21 +53,22 @@ jobs:
 
           MATRIX_ITEMS=()
 
-          # 변경된 디렉토리를 확인하고 매트릭스 항목 생성
-          for DIR in "${!ROLE_MAP[@]}"; do
-            if echo "$FILES" | grep -q "^$DIR/"; then
-              ROLE_KEY="${ROLE_MAP[$DIR]}"
+          for FILE in $FILES; do
+            DIR=$(dirname "$FILE")
+            TOP_DIR=$(echo $DIR | cut -d/ -f1)
+            ROLE_KEY="${ROLE_MAP[$TOP_DIR]}"
+
+            if [ -n "$ROLE_KEY" ]; then
               MATRIX_ITEMS+=("{\"dir\":\"$DIR\",\"role_key\":\"$ROLE_KEY\"}")
             fi
           done
 
-          # matrix가 비어 있으면 빈 배열, 아니면 JSON 배열로 변환
+          # 중복 제거
           if [ ${#MATRIX_ITEMS[@]} -eq 0 ]; then
             echo "matrix=[]" >> $GITHUB_OUTPUT
           else
-            # 'toJson' 함수로 배열을 JSON 형식으로 변환
-            JSON="${{ toJson(MATRIX_ITEMS) }}"
-            echo "matrix=$JSON" >> $GITHUB_OUTPUT
+            UNIQUE_MATRIX=$(echo "[${MATRIX_ITEMS[*]}]" | jq 'unique')
+            echo "matrix=$UNIQUE_MATRIX" >> $GITHUB_OUTPUT
           fi
 
   terraform-ci:
@@ -86,11 +87,11 @@ jobs:
       INFRACOST_TERRAFORM_CLI_WRAPPER: false
 
     steps:
-      # 리포지토리 체크아웃
+      # 변경된 코드 체크아웃
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # AWS 자격 증명 설정
+      # (OIDC 기반) AWS 자격 증명 구성
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -102,7 +103,7 @@ jobs:
         run: |
           curl -sSL https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
 
-      # 코드 보안 검사
+      # tfsec 실행(High 이상의 취약점이 있으면 실패 처리)
       - name: Run tfsec (fail on HIGH+)
         run: tfsec --minimum-severity HIGH --no-color ${{ matrix.dir }}
 
@@ -116,18 +117,18 @@ jobs:
       - name: Terraform Init
         run: terraform init
         working-directory: ${{ matrix.dir }}
-      
-      # Terraform 포맷 체크
+
+      # Terraform 코드 포맷 확인
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
         working-directory: ${{ matrix.dir }}
 
-      # Terraform 유효성 검사
+      # Terraform 문법 유효성 검사
       - name: Terraform Validate
         run: terraform validate
         working-directory: ${{ matrix.dir }}
 
-      # Terraform Plan
+      # Terraform plan 및 plan 파일 생성, 출력
       - name: Terraform Plan
         id: plan
         run: |
@@ -139,7 +140,7 @@ jobs:
           echo 'EOF' >> $GITHUB_OUTPUT
         working-directory: ${{ matrix.dir }}
 
-      # PR에 Terraform Plan 댓글 작성
+      # Terraform plan 결과를 PR 댓글로 출력
       - name: Comment Terraform Plan on PR
         if: github.event.pull_request.number != ''
         uses: peter-evans/create-or-update-comment@v4
@@ -151,11 +152,11 @@ jobs:
             ${{ steps.plan.outputs.PLAN }}
             ```
 
-      # Infracost 설정
+      # Infracost 설치
       - name: Setup Infracost
         uses: infracost/actions/setup@v2
 
-      # Infracost Breakdown
+      # Terraform plan.json 기반으로 비용 분석
       - name: Infracost Breakdown
         run: |
           infracost breakdown \
@@ -164,7 +165,7 @@ jobs:
             --out-file=infracost.json
         working-directory: ${{ matrix.dir }}
 
-      # PR에 Infracost 분석 결과 댓글 작성
+      # Infracost 결과를 PR 댓글로 작성
       - name: Infracost Comment on Pull Request
         uses: infracost/actions/comment@v1
         with:
