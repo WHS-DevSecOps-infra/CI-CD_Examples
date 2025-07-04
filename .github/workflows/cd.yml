@@ -14,11 +14,9 @@ jobs:
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
     steps:
-      # 체크아웃
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 변경된 디렉토리 필터링
       - name: Filter Paths
         id: filter
         uses: dorny/paths-filter@v3
@@ -39,7 +37,7 @@ jobs:
             management:
               - 'management-team-account/**'
 
-      - name: Build Matrix from Filter
+      - name: Build Matrix from Filter (with subdirs)
         id: set
         env:
           FILTER_OUTPUTS_operation: ${{ steps.filter.outputs.operation }}
@@ -67,7 +65,13 @@ jobs:
             VALUE="${!VAR_NAME}"
 
             if [ "$VALUE" = "true" ]; then
-              MATRIX_ITEMS+=("{\"dir\":\"${KEY}-team-account\",\"role_key\":\"${ROLE_MAP[$KEY]}\"}")
+              BASE_DIR="${KEY}-team-account"
+
+              for DIR in $(find $BASE_DIR -type d -mindepth 1); do
+                if [[ "$DIR" != *".terraform"* ]]; then
+                  MATRIX_ITEMS+=("{\"dir\":\"$DIR\",\"role_key\":\"${ROLE_MAP[$KEY]}\"}")
+                fi
+              done
             fi
           done
 
@@ -89,29 +93,24 @@ jobs:
       fail-fast: false
 
     steps:
-      # 체크아웃
       - name: Checkout repository
         uses: actions/checkout@v3
-      
-      # AWS 자격 증명 설정
+
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ap-northeast-2
           role-to-assume: ${{ secrets[matrix.role_key] }}
 
-      # Terraform 설치
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v1
         with:
           terraform_version: 1.4.0
 
-      # Terraform 초기화
       - name: Terraform Init
         run: terraform init
         working-directory: ${{ matrix.dir }}
-      
-      # Terraform 적용
+
       - name: Terraform Apply
         run: terraform apply -auto-approve
         working-directory: ${{ matrix.dir }}
